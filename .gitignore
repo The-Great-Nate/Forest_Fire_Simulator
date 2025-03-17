@@ -1,0 +1,7 @@
+plot.py
+burning_forest.dat
+.vscode/
+.ipynb_checkpoints/
+.animations/
+*.exe
+*.dat
