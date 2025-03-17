@@ -19,7 +19,6 @@ double rng()
 // function to append the current grid of to an already open file
 void write_grid(std::ofstream &grid_file, int Ni, int Nj, std::vector<std::vector<int>> grid)
 {
-
     // write the size of the image
     grid_file << Ni << " " << Nj << std::endl;
 
@@ -61,7 +60,6 @@ std::vector<std::vector<int>> random_grid(int Ni, int Nj, double p)
             grid[0][j] = 2;
         }
     }
-
     return grid;
 }
 
@@ -132,7 +130,7 @@ int main(int argc, char **argv)
     int Nj = atoi(argv[3]);   // the size of the grid in the y-dimension
     double p = atof(argv[4]); // probability tree is generated
     std::vector<std::vector<int>> grid = random_grid(Ni, Nj, p);
-    //display_grid(grid);
+    // display_grid(grid);
 
     std::ofstream grid_file("burning_forest.dat");
     if (write)
@@ -153,4 +151,4 @@ int main(int argc, char **argv)
             }
         }
     }
-}   
+}
