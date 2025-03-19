@@ -2,6 +2,12 @@ plot.py
 burning_forest.dat
 .vscode/
 .ipynb_checkpoints/
-.animations/
+animations/
 *.exe
 *.dat
+2d_fire.cpp
+.gitignore
+sand.cpp
+wow.cpp
+wow2.cpp
+what_is_this.h
