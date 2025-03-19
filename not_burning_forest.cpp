@@ -34,11 +34,12 @@ void write_grid(std::ofstream &grid_file, int Ni, int Nj, std::vector<std::vecto
 }
 
 // function which initialises a random grid
-std::vector<std::vector<int>> random_grid(int Ni, int Nj, double p)
+std::vector<int> random_grid(int Ni, int Nj, double p)
 {
-    std::vector<std::vector<int>> grid(Ni, std::vector<int>(Nj, 0));
-    // randomly fill the initial grid with trees, using probability p
-    for (int i = 0; i < Ni; ++i)
+    std::vector<int> grid(Ni * Nj, 0);
+    int ind = 0
+        // randomly fill the initial grid with trees, using probability p
+        for (int i = 0; i < Ni; ++i)
     {
         for (int j = 0; j < Nj; ++j)
         {
@@ -48,17 +49,19 @@ std::vector<std::vector<int>> random_grid(int Ni, int Nj, double p)
             // if the normalised random number is less than our probability p, fill the site with a tree
             if (rn < p)
             {
-                grid[i][j] = 1;
+                grid[ind] = 1;
             }
+            ind += 1
         }
     }
 
     // Set the top row (i = 0) to 2 if it was 1
     for (int j = 0; j < Nj; ++j)
     {
-        if (grid[0][j] == 1)
+        ind = get_1d_ind(0, j, Nj);
+        if (grid[ind] == 1)
         {
-            grid[0][j] = 2;
+            grid[ind] = 2;
         }
     }
     return grid;
@@ -82,82 +85,50 @@ void distribute_grid(int Nj, int iproc, int nproc, int &j0, int &j1)
     }
 }
 
-bool update_forest_serial(int Ni, int Nj, std::vector<std::vector<int>> &old_forest)
+int get_1d_ind(int i, int j, int Nj)
 {
-    bool burning = false;
-    std::vector<std::vector<int>> new_forest = old_forest;
-    for (int i = 0; i < Ni; i++)
-    {
-        for (int j = 0; j < Nj; j++)
-        {
-            if (old_forest[i][j] == 2) // If tree is burning
-            {
-                if (i > 0 && old_forest[i - 1][j] == 1) // Above
-                {
-                    new_forest[i - 1][j] = 2;
-                    burning = true;
-                }
-                if (i + 1 < Ni && old_forest[i + 1][j] == 1) // Below
-                {
-                    new_forest[i + 1][j] = 2;
-                    burning = true;
-                }
-                if (j > 0 && old_forest[i][j - 1] == 1) // Left
-                {
-                    new_forest[i][j - 1] = 2;
-                    burning = true;
-                }
-                if (j + 1 < Nj && old_forest[i][j + 1] == 1) // Right
-                {
-                    new_forest[i][j + 1] = 2;
-                    burning = true;
-                }
-                new_forest[i][j] = 3; // Tree evolves into Ash... or dies, oops
-            }
-        }
-    }
-
-    old_forest = new_forest; // Copy updated grid back
-    return burning;          // Return true if fire is still burning
+    return (j * Nj) + i
 }
 
-bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc, std::vector<std::vector<int>> &old_forest, std::vector<std::vector<int>> &new_forest, double &calculation_time, double &communication_time)
+bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc, std::vector<int> &old_forest, std::vector<int> &new_forest, double &calculation_time, double &communication_time)
 {
     bool burning = false;
     double start_calculation = MPI_Wtime();
-
     for (int i = 0; i < Ni; i++)
     {
         for (int j = j0; j < j1; j++)
         {
-            if (old_forest[i][j] == 2) // If tree is burning
+            int index = get_1d_ind(i, j, Nj);
+            if (old_forest[index] == 2) // If tree is burning
             {
-                if (i > 0 && old_forest[i - 1][j] == 1) // Above
+                int abv_index = get_1d_ind(i - 1, j, Nj);
+                int bel_index = get_1d_ind(i + 1, j, Nj);
+                int lef_index = get_1d_ind(i, j - 1, Nj);
+                int rig_index = get_1d_ind(i - 1, j + 1, Nj);
+                if (i > 0 && old_forest[abv_index] == 1) // Above
                 {
-                    new_forest[i - 1][j] = 2;
+                    new_forest[abv_index] = 2;
                     burning = true;
                 }
-                if (i + 1 < Ni && old_forest[i + 1][j] == 1) // Below
+                if (i + 1 < Ni && old_forest[bel_index] == 1) // Below
                 {
-                    new_forest[i + 1][j] = 2;
+                    new_forest[bel_index] = 2;
                     burning = true;
                 }
-                if (j > 0 && old_forest[i][j - 1] == 1) // Left
+                if (j > 0 && old_forest[lef_index] == 1) // Left
                 {
-                    new_forest[i][j - 1] = 2;
+                    new_forest[lef_index] = 2;
                     burning = true;
                 }
-                if (j + 1 < Nj && old_forest[i][j + 1] == 1) // Right
+                if (j + 1 < Nj && old_forest[rig_index] == 1) // Right
                 {
-                    new_forest[i][j + 1] = 2;
+                    new_forest[rig_index] = 2;
                     burning = true;
                 }
-                new_forest[i][j] = 3; // Tree evolves into Ash... or dies, oops
+                new_forest[index] = 3; // Tree evolves into Ash... or dies, oops
             }
         }
     }
-
-    double end_calculation = MPI_Wtime();
 
     double start_communication = MPI_Wtime();
 
@@ -167,17 +138,13 @@ bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc, std
         {
             if (iproc > 0 && iproc % 2 == oe) // send left col to left neighbour
             {
-                for (int i = i0; i < i1; i++)
-                {
-                    MPI_Send(&new_forest[i][j0], 1, MPI_INT, iproc - 1, j0, MPI_COMM_WORLD);
-                }
+                int ind = get_1d_ind(0, j0, Nj)
+                    MPI_Send(&new_forest[ind], Nj, MPI_INT, iproc - 1, j0, MPI_COMM_WORLD);
             }
             if (iproc < nproc - 1 && iproc % 2 == (oe + 1) % 2) // recieve left col from right neighbour -> updating right neighbour right col
             {
-                for (int i = i0; i < i1; i++)
-                {
-                    MPI_Recv(&old_forest[i][j1], 1, MPI_INT, iproc + 1, j1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                }
+                int ind = get_1d_ind(0, j1, Nj)
+                    MPI_Recv(&old_forest[ind], Nj, MPI_INT, iproc + 1, j1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
         }
 
@@ -185,20 +152,21 @@ bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc, std
         {
             if (iproc < nproc - 1 && iproc % 2 == oe) // send right col to right neighbour
             {
-                for (int i = i0; i < i1; i++)
-                {
-                    MPI_Send(&new_forest[i][j1 - 1], 1, MPI_INT, iproc + 1, j1-1, MPI_COMM_WORLD);
-                }
+                int ind = get_1D_index(0, j1 - 1, Nj);
+                MPI_Send(&new_forest[ind], Nj, MPI_INT, iproc + 1, j1 - 1, MPI_COMM_WORLD);
             }
             if (iproc > 0 && iproc % 2 == (oe + 1) % 2) // recieve right column from left neighbour -> updating right neighbour left col
             {
-                for (int i = i0; i < i1; i++)
-                {
-                    MPI_Recv(&old_forest[i][j0 - 1], 1, MPI_INT, iproc - 1, j0-1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                }
+                int ind = get_1D_index(0, j0 - 1, Nj);
+                MPI_Recv(&old_forest[ind], Nj, MPI_INT, iproc - 1, j0 - 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
         }
-        
+        int local_size = Nj * (j1 - j0);
+        std::vector<int> temp_forest(Ni * Nj); // temp grid to store reassembled forest
+        int start_index = get_1d_ind(0, j0, Nj);
+        // Assemble and gather columns from all processes and write to central forest
+        MPI_Allgatherv(&new_forest[start_index], local_size, MPI_INT, temp_forest.data(), recvcounts.data(), displs.data(), MPI_INT, MPI_COMM_WORLD);
+        old_forest = temp_forest;
     }
     else
     {
@@ -215,10 +183,9 @@ bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc, std
         burning = global_burning;
     }
 
-    double local_computation_time = end_calculation - start_calculation;
-    double local_communication_time = end_communication - start_communication;
+    calculation_time += start_communication - start_calculation;
+    communication_time += end_communication - start_communication;
 
-    std::cout << "Process\t" << iproc << "\tCalculation Time\t" << local_computation_time << "\tCommunication Time\t" << local_communication_time << std::endl;
 
     return burning; // Return true if fire is still burning
 }
@@ -262,7 +229,7 @@ int main(int argc, char **argv)
     int Ni = atoi(argv[3]);   // the size of the grid in the x-dimension
     int Nj = atoi(argv[4]);   // the size of the grid in the y-dimension
     double p = atof(argv[5]); // probability tree is generated
-    std::vector<std::vector<int>> grid;
+    std::vector<int> grid;
 
     if (iproc == 0)
     {
@@ -270,47 +237,34 @@ int main(int argc, char **argv)
         grid = random_grid(Ni, Nj, p);
     }
 
+    double start_broadcast = MPI_Wtime();
     if (nproc > 1)
     {
-        // first share the image size
+        // first share the grid size
         MPI_Bcast(&Ni, 1, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Bcast(&Nj, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-        // flattening the grid for broadcasting
-        std::vector<int> flat_grid(Ni * Nj);
-        if (iproc == 0)
+        // second share the actual grid
+        for (int i = 0; i < Ni * Nj; i++)
         {
-            int f_ind = 0;
-            for (int i = 0; i < Ni; ++i)
-            {
-                for (int j = 0; j < Nj; ++j)
-                {
-                    flat_grid[f_ind] = grid[i][j];
-                    f_ind += 1;
-                }
-            }
+            grid.push_back(0);
         }
-        MPI_Bcast(flat_grid.data(), Ni * Nj, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(grid.data(), Ni * Nj, MPI_INT, 0, MPI_COMM_WORLD);
     }
+    double end_boadcast = MPI_Wtime();
     
-    // reconstruct grid
-    if (iproc != 0)
-    {
-        int f_ind = 0;
-        for (int i = 0; i < Ni; ++i)
-        {
-            for (int j = 0; j < Nj; ++j)
-            {
-                grid[i][j] = flat_grid[f_ind];
-                f_ind += 1
-            }
-        }
-    }
 
-    std::vector < int > new_grid(Ni*Nj, 0);
+    std::vector<int> new_grid(Ni * Nj, 0);
+
+    std::vector<int> recvcounts(nproc);
+    std::vector<int> displs(nproc);
 
     int j0, j1;
     distribute_grid(Nj, iproc, nproc, j0, j1);
+    for (int p = 0; p < nproc; p++)
+    {
+        recvcounts[p] = Ni * (j1 - j0); // Find no. of elements each process stores
+        displs[p] = j0;
+    }
 
     std::ofstream grid_file("burning_forest.dat");
     if (write)
@@ -320,7 +274,7 @@ int main(int argc, char **argv)
 
     bool burning = true;
     int nsteps = 0;
-    double start_time = MPI_Wtime();
+    double start_burn = MPI_Wtime();
     double calculation_time = 0.0, communication_time = 0.0;
     while (burning)
     {
@@ -334,9 +288,14 @@ int main(int argc, char **argv)
         }
         nsteps += 1
     }
-    double end_time = MPI_Wtime();
+    double end_burn = MPI_Wtime();
+
+    double broadcast_time = end_boadcast - start_broadcast;
+    double burning_time = end_burn - start_burn;
+    double total_MPI_time = end_time - start_broadcast;
     // Finalise MPI (but in american spelling)
     MPI_Finalize();
+    
 
-    std::cout << "Process_vs_Steps\t" << nproc << "\t" << nsteps << "\t" << end_time - start_time << std::endl;
+    std::cout << nproc << "\t" << total_MPI_time << "\t" << broadcast_time << "\t" << calculation_time << "\t" << communication_time << "\t" << burning_time << "\t" << nsteps << std::endl;
 }
