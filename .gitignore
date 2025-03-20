@@ -11,3 +11,7 @@ sand.cpp
 wow.cpp
 wow2.cpp
 what_is_this.h
+*.mp4
+*.sh
+burning
+.gitignore
