@@ -3,6 +3,7 @@
 #include <vector>
 #include <random>
 #include <cstdlib>
+#include <filesystem>
 #include <mpi.h>
 
 // Forest Fires are not good
@@ -26,6 +27,25 @@ double rng()
 
     double random_float = dist(gen);
     return random_float;
+}
+
+std::string generate_config_id()
+{
+    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    std::string id = "";
+
+    std::random_device rd;                                         
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dist(0, chars.size() - 1);
+
+    // Generate 5 random characters/digits
+    for (int i = 0; i < 5; ++i)
+    {
+        int rand_ind = dist(gen);
+        id += chars[rand_ind];
+    }
+
+    return id;
 }
 
 int get_1D_index(int i, int j, int Nj)
@@ -164,44 +184,51 @@ std::vector<int> random_grid(int Ni, int Nj, double p)
     return grid;
 }
 
-std::vector<int> read_forest(std::string filename, int &Ni, int &Nj)
+std::vector<int> read_forest(std::string &file_name, int &Ni, int &Nj)
 {
 
-    std::cout << "Reading in forest data from " << filename << std::endl;
-
-    // open the file
-    std::ifstream forest_file(filename);
-
-    // read in the image data to a single 1D vector
-    std::vector<int> forest_data;
-    std::vector<int> temp_data;
-    int state;
-    while (forest_file >> state)
+    if (std::filesystem::exists(file_name))
     {
-        temp_data.push_back(state);
-    }
-    forest_data.resize(Ni * Nj, 0);
+        std::cout << "Reading in forest data from " << file_name << std::endl;
 
-    // Loop to write the read data into rectanglular/square forest vector of 0's
-    // Loop takes into account if user enters very large Ni and Nj
-    // Loop can cut off extra data if user specifies Ni and Nj to be too small
-    // The input forest is created by the user... The user must have enough inteligence about their own forest
-    for (int i = 0; i < temp_data.size() && i < Ni * Nj; i++)
-    {
-        forest_data[i] = temp_data[i];
-    }
+        // open the file
+        std::ifstream forest_file(file_name);
 
-    for (int j = 0; j < Nj; j++)
-    {
-        int ind = get_1D_index(0, j, Nj);
-        if (forest_data[ind] == 1)
+        // read in the image data to a single 1D vector
+        std::vector<int> forest_data;
+        std::vector<int> temp_data;
+        int state;
+        while (forest_file >> state)
         {
-            forest_data[ind] = 2;
+            temp_data.push_back(state);
         }
+        forest_data.resize(Ni * Nj, 0);
+
+        // Loop to write the read data into rectanglular/square forest vector of 0's
+        // Loop takes into account if user enters very large Ni and Nj
+        // Loop can cut off extra data if user specifies Ni and Nj to be too small
+        // The input forest is created by the user... The user must have enough inteligence about their own forest
+        for (int i = 0; i < temp_data.size() && i < Ni * Nj; i++)
+        {
+            forest_data[i] = temp_data[i];
+        }
+
+        for (int j = 0; j < Nj; j++)
+        {
+            int ind = get_1D_index(0, j, Nj);
+            if (forest_data[ind] == 1)
+            {
+                forest_data[ind] = 2;
+            }
+        }
+        // close the file
+        forest_file.close();
+        return forest_data;
     }
-    // close the file
-    forest_file.close();
-    return forest_data;
+    else
+    {
+        return {};
+    }
 }
 
 void communicate_cols(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
@@ -442,6 +469,8 @@ int main(int argc, char **argv)
     // Define grids
     std::vector<int> grid;
     std::vector<int> new_grid;
+    std::string config_id;
+    char recieved_id[6];
 
     // Make process 0 generate and initialise grid and new_grid
     if (iproc == 0)
@@ -449,6 +478,11 @@ int main(int argc, char **argv)
         if (file_name != "no file")
         {
             grid = read_forest(file_name, Ni, Nj);
+            if (grid.size() == 0)
+            {
+                std::cerr << file_name << " Not found!!!" << std::endl;
+                return EXIT_FAILURE;
+            }
             new_grid = grid;
         }
         // Root process initializes the grid
@@ -457,6 +491,8 @@ int main(int argc, char **argv)
             grid = random_grid(Ni, Nj, p);
             new_grid = grid;
         }
+        config_id = generate_config_id();
+        strcpy(recieved_id, config_id.c_str());
     }
     // initialise grid and new_grid before proc0 broadcasts
     else
@@ -475,8 +511,11 @@ int main(int argc, char **argv)
         // Share grid data
         MPI_Bcast(grid.data(), Ni * Nj, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Bcast(new_grid.data(), Ni * Nj, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(recieved_id, 6, MPI_CHAR, 0, MPI_COMM_WORLD);
     }
     double end_boadcast = MPI_Wtime(); // End broadcast time measurement
+
+    config_id = recieved_id;
 
     // Start distributing columns to processes
     int j0, j1;
@@ -491,7 +530,7 @@ int main(int argc, char **argv)
     {
         if (iproc == 0)
         {
-            std::string file_name = "output_data/burning_forest_" + std::to_string(Ni) + "x" + std::to_string(Nj) + "_p" + std::to_string(p) + ".dat";
+            std::string file_name = "output_data/burning_forest_" + std::to_string(Ni) + "x" + std::to_string(Nj) + "_p" + std::to_string(p) + "_" + config_id + ".dat";
             grid_file.open(file_name, std::ios::trunc);
         }
     }
@@ -546,11 +585,8 @@ int main(int argc, char **argv)
     double burning_time = end_burn - start_burn;
     double total_MPI_time = end_burn - start_broadcast;
 
-    // Output via 1 process only.
-    if (iproc == 0)
-    {
-        std::cout << iproc << "\t" << nproc << "\t" << total_MPI_time << "\t" << broadcast_time << "\t" << calculation_time << "\t" << communication_time << "\t" << burning_time << "\t" << nsteps << std::endl;
-    }
+    // Output
+    std::cout << config_id << "\t" << iproc << "\t" << nproc << "\t" << Ni << "\t" << Nj << "\t" << p << "\t" << total_MPI_time << "\t" << broadcast_time << "\t" << calculation_time << "\t" << communication_time << "\t" << burning_time << "\t" << nsteps << std::endl;
 
     // Finalise MPI (but in american spelling)
     MPI_Finalize();
