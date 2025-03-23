@@ -34,7 +34,7 @@ std::string generate_config_id()
     const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     std::string id = "";
 
-    std::random_device rd;                                         
+    std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<> dist(0, chars.size() - 1);
 
@@ -186,14 +186,12 @@ std::vector<int> random_grid(int Ni, int Nj, double p)
 
 std::vector<int> read_forest(std::string &file_name, int &Ni, int &Nj)
 {
+    std::cout << "Reading in forest data from " << file_name << std::endl;
 
-    if (std::filesystem::exists(file_name))
+    // open the file
+    std::ifstream forest_file(file_name);
+    if (forest_file.is_open())
     {
-        std::cout << "Reading in forest data from " << file_name << std::endl;
-
-        // open the file
-        std::ifstream forest_file(file_name);
-
         // read in the image data to a single 1D vector
         std::vector<int> forest_data;
         std::vector<int> temp_data;
@@ -492,7 +490,7 @@ int main(int argc, char **argv)
             new_grid = grid;
         }
         config_id = generate_config_id();
-        strcpy(recieved_id, config_id.c_str());
+        std::sprintf(recieved_id, "%s", config_id.c_str());
     }
     // initialise grid and new_grid before proc0 broadcasts
     else
