@@ -33,34 +33,45 @@ int get_1D_index(int i, int j, int Nj)
     return (i * Nj) + j;
 }
 
-void display_grid(int Ni, int Nj, const std::vector<int> &grid)
+void display_grid(int Ni, int Nj, int iproc, int nproc, const std::vector<int> &grid)
 {
-    for (int i = 0; i < Ni; ++i)
+    for (int p = 0; p < nproc; p++)
     {
-        for (int j = 0; j < Nj; ++j)
+        if (p == iproc)
         {
-            int ind = get_1D_index(i, j, Nj);
-            std::cout << grid[ind] << " ";
+            for (int i = 0; i < Ni; ++i)
+            {
+                for (int j = 0; j < Nj; ++j)
+                {
+                    int ind = get_1D_index(i, j, Nj);
+                    std::cout << grid[ind] << " ";
+                }
+                std::cout << "\n";
+            }
+            std::cout << "\n";
         }
-        std::cout << "\n";
     }
-    std::cout << "\n";
 }
 
-void display_grid_proc(int Ni, int Nj, int j0, int j1, const std::vector<int> &grid)
+void display_grid_proc(int Ni, int Nj, int iproc, int nproc, int j0, int j1, const std::vector<int> &grid)
 {
-    for (int i = 0; i < Ni; ++i)
+    for (int p = 0; p < nproc; p++)
     {
-        for (int j = j0; j < j1; ++j)
+        if (p == iproc)
         {
-            int ind = get_1D_index(i, j, Nj);
-            std::cout << grid[ind] << " ";
+            for (int i = 0; i < Ni; ++i)
+            {
+                for (int j = j0; j < j1; ++j)
+                {
+                    int ind = get_1D_index(i, j, Nj);
+                    std::cout << grid[ind] << " ";
+                }
+                std::cout << "\n";
+            }
+            std::cout << "\n";
         }
-        std::cout << "\n";
     }
-    std::cout << "\n";
 }
-
 std::vector<int> send_partial_grid(int Ni, int Nj, int j0, int j1, std::vector<int> grid)
 {
     int partial_columns = j1 - j0;
@@ -163,10 +174,21 @@ std::vector<int> read_forest(std::string filename, int &Ni, int &Nj)
 
     // read in the image data to a single 1D vector
     std::vector<int> forest_data;
+    std::vector<int> temp_data;
     int state;
     while (forest_file >> state)
     {
-        forest_data.push_back(state);
+        temp_data.push_back(state);
+    }
+    forest_data.resize(Ni * Nj, 0);
+
+    // Loop to write the read data into rectanglular/square forest vector of 0's
+    // Loop takes into account if user enters very large Ni and Nj
+    // Loop can cut off extra data if user specifies Ni and Nj to be too small
+    // The input forest is created by the user... The user must have enough inteligence about their own forest
+    for (int i = 0; i < temp_data.size() && i < Ni * Nj; i++)
+    {
+        forest_data[i] = temp_data[i];
     }
 
     for (int j = 0; j < Nj; j++)
@@ -197,8 +219,8 @@ void communicate_cols(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
             for (int i = 0; i < Ni; i++)
             {
                 int ind = get_1D_index(i, j0, Nj);
-                //std::cout << old_forest[ind] << " was Sending1 row " << i << " col " << j0 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc - 1 << std::endl;
-                //  send the data, using i as a tag
+                // std::cout << old_forest[ind] << " was Sending1 row " << i << " col " << j0 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc - 1 << std::endl;
+                //   send the data, using i as a tag
                 MPI_Send(&old_forest[ind], 1, MPI_INT, iproc - 1, i, MPI_COMM_WORLD);
             }
         }
@@ -209,7 +231,7 @@ void communicate_cols(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
             for (int i = 0; i < Ni; i++)
             {
                 int ind = get_1D_index(i, j1, Nj);
-                //std::cout << old_forest[ind] << " was Receiving1 row " << i << " col " << j1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc + 1 << std::endl;
+                // std::cout << old_forest[ind] << " was Receiving1 row " << i << " col " << j1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc + 1 << std::endl;
                 MPI_Recv(&old_forest[ind], 1, MPI_INT, iproc + 1, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             }
         }
@@ -469,7 +491,8 @@ int main(int argc, char **argv)
     {
         if (iproc == 0)
         {
-            grid_file.open("burning_forest.dat", std::ios::trunc);
+            std::string file_name = "output_data/burning_forest_" + std::to_string(Ni) + "x" + std::to_string(Nj) + "_p" + std::to_string(p) + ".dat";
+            grid_file.open(file_name, std::ios::trunc);
         }
     }
 
