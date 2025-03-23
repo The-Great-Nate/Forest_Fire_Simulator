@@ -7,6 +7,17 @@
 
 // Forest Fires are not good
 
+struct ForestState
+{
+    bool burning;
+    bool comm_cols;
+
+    ForestState(bool burning_val, bool comm_cols_val)
+        : burning(burning_val), comm_cols(comm_cols_val)
+    {
+    }
+};
+
 double rng()
 {
     std::random_device rd;
@@ -50,19 +61,43 @@ void display_grid_proc(int Ni, int Nj, int j0, int j1, const std::vector<int> &g
     std::cout << "\n";
 }
 
-// function to append the current grid of to an already open file
-void write_grid(std::ofstream &grid_file, int Ni, int Nj, std::vector<int> grid)
+std::vector<int> send_partial_grid(int Ni, int Nj, int j0, int j1, std::vector<int> grid)
 {
-    // write the size of the image
-    grid_file << Ni << " " << Nj << std::endl;
-    int ind = 0;
-    // now write out the grid
+    int partial_columns = j1 - j0;
+    std::vector<int> partial_grid(Ni * partial_columns);
+
     for (int i = 0; i < Ni; ++i)
     {
         for (int j = 0; j < Nj; ++j)
         {
-            ind = get_1D_index(i, j, Nj);
-            grid_file << i << " " << j << " " << grid[ind] << std::endl;
+            if (j < j0 || j >= j1)
+            {
+                int index = get_1D_index(i, j, Nj);
+                grid[index] = 0;
+            }
+        }
+    }
+    return grid;
+}
+
+// function to append the current grid of to an already open file
+void write_grid(std::ofstream &grid_file, int Ni, int Nj, int j0, int j1, std::vector<int> &grid, int iproc, int nproc)
+{
+    std::vector<int> full_grid(Ni * Nj, 0);
+    std::vector<int> partial_grid = send_partial_grid(Ni, Nj, j0, j1, grid);
+
+    MPI_Reduce(partial_grid.data(), full_grid.data(), Ni * Nj, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (iproc == 0)
+    {
+        grid_file << Ni << " " << Nj << std::endl;
+        for (int i = 0; i < Ni; ++i)
+        {
+            for (int j = 0; j < Nj; ++j)
+            {
+                int ind = get_1D_index(i, j, Nj);
+                grid_file << i << " " << j << " " << full_grid[ind] << std::endl;
+            }
         }
     }
 }
@@ -134,8 +169,6 @@ std::vector<int> read_forest(std::string filename, int &Ni, int &Nj)
         forest_data.push_back(state);
     }
 
-    std::cout << "\n";
-
     for (int j = 0; j < Nj; j++)
     {
         int ind = get_1D_index(0, j, Nj);
@@ -144,27 +177,144 @@ std::vector<int> read_forest(std::string filename, int &Ni, int &Nj)
             forest_data[ind] = 2;
         }
     }
-    std::cout << "\n";
     // close the file
     forest_file.close();
     return forest_data;
 }
 
-bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
-                       std::vector<int> &old_forest,
-                       std::vector<int> &new_forest,
-                       double &calculation_time,
-                       double &communication_time,
-                       std::vector<int> &recvcounts,
-                       std::vector<int> &displs)
+void communicate_cols(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
+                      std::vector<int> &old_forest,
+                      std::vector<int> &new_forest,
+                      double &communication_time)
+{
+    double start_communication = MPI_Wtime();
+    for (int oe = 0; oe <= 1; oe++)
+    {
+        // send
+        if (iproc > 0 && iproc % 2 == oe)
+        {
+            // find the index of the first pixel on row i and column j0
+            for (int i = 0; i < Ni; i++)
+            {
+                int ind = get_1D_index(i, j0, Nj);
+                //std::cout << old_forest[ind] << " was Sending1 row " << i << " col " << j0 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc - 1 << std::endl;
+                //  send the data, using i as a tag
+                MPI_Send(&old_forest[ind], 1, MPI_INT, iproc - 1, i, MPI_COMM_WORLD);
+            }
+        }
+        // receive
+        if (iproc < nproc - 1 && iproc % 2 == (oe + 1) % 2)
+        {
+            // find the index of the first pixel on row i and column j1
+            for (int i = 0; i < Ni; i++)
+            {
+                int ind = get_1D_index(i, j1, Nj);
+                //std::cout << old_forest[ind] << " was Receiving1 row " << i << " col " << j1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc + 1 << std::endl;
+                MPI_Recv(&old_forest[ind], 1, MPI_INT, iproc + 1, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
+
+    // now send in the other direction, again using our even/odd split
+    for (int oe = 0; oe <= 1; oe++)
+    {
+
+        // send
+        if (iproc < nproc - 1 && iproc % 2 == oe)
+        {
+            // find the index of the first pixel on row i and column j1-1
+            for (int i = 0; i < Ni; i++)
+            {
+                int ind = get_1D_index(i, j1 - 1, Nj);
+                // send the data, using i as a tag
+                // std::cout << "sending val " << new_forest[ind] << " Sending2 row " << i << " col " << j1 - 1 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc + 1 << std::endl;
+                // std::cout << "it's send: " << new_forest[ind] << std::endl;
+                MPI_Send(&old_forest[ind], 1, MPI_INT, iproc + 1, i, MPI_COMM_WORLD);
+            }
+        }
+        // receive
+        if (iproc > 0 && iproc % 2 == (oe + 1) % 2)
+        {
+            // find the index of the first pixel on row i and column j0-1
+            for (int i = 0; i < Ni; i++)
+            {
+                int ind = get_1D_index(i, j0 - 1, Nj);
+                // std::cout << "it's before: " << new_forest[ind] << std::endl;
+                MPI_Recv(&old_forest[ind], 1, MPI_INT, iproc - 1, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                // std::cout << "it's: Now " << old_forest[ind] << std::endl;
+                // std::cout << "recieing val " << old_forest[ind] << " Receiving2 row " << i << " col " << j0 - 1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc - 1 << std::endl;
+            }
+        }
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    double end_communication = MPI_Wtime();
+    communication_time += (end_communication - start_communication);
+}
+
+void update_col_boundaries(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
+                           std::vector<int> &old_forest,
+                           std::vector<int> &new_forest,
+                           double &calculation_time)
+{
+    double start_calculation = MPI_Wtime();
+    for (int i = 0; i < Ni; i++)
+    {
+        if (iproc > 0) // Update left boundary
+        {
+            int ind = get_1D_index(i, j0 - 1, Nj);
+            if (old_forest[ind] == 2)
+            {
+                int ind_local = get_1D_index(i, j0, Nj);
+                if (new_forest[ind_local] == 1)
+                {
+                    new_forest[ind_local] = 2;
+                }
+            }
+        }
+
+        if (iproc < nproc - 1) // Update right boundary
+        {
+            int ind = get_1D_index(i, j1, Nj);
+            if (old_forest[ind] == 2) // If the received cell is burning
+            {
+                int ind_local = get_1D_index(i, j1 - 1, Nj);
+                if (new_forest[ind_local] == 1)
+                {
+                    new_forest[ind_local] = 2;
+                }
+            }
+        }
+    }
+    double end_calculation = MPI_Wtime();
+
+    calculation_time += end_calculation - start_calculation;
+}
+
+void reset_old_forest(int Ni, int Nj, int j0, int j1,
+                      std::vector<int> &old_forest,
+                      std::vector<int> &new_forest)
+{
+    for (int i = 0; i < Ni; i++)
+    {
+        for (int j = j0; j < j1; j++)
+        {
+            int index = get_1D_index(i, j, Nj);
+            old_forest[index] = new_forest[index];
+        }
+    }
+}
+
+ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
+                                std::vector<int> &old_forest,
+                                std::vector<int> &new_forest,
+                                double &calculation_time)
 {
     bool burning = false;
+    bool comm_cols = false;
+    int left_bound, right_bound;
+    ForestState state(burning, comm_cols);
     double start_calculation = MPI_Wtime();
-    if (iproc == 0)
-    {
-        // display_grid_proc(Ni, Nj, j0, j1, old_forest);
-        display_grid(Ni, Nj, old_forest);
-    }
     for (int i = 0; i < Ni; i++)
     {
         for (int j = j0; j < j1; j++)
@@ -176,11 +326,6 @@ bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
                 int bel_index = get_1D_index(i + 1, j, Nj);
                 int lef_index = get_1D_index(i, j - 1, Nj);
                 int rig_index = get_1D_index(i, j + 1, Nj);
-                if (iproc == 0 && i == 2)
-                {
-                    std::cout << "THE THING IN THE MIDDLE " << old_forest[index] << std::endl;
-                    std::cout << "THE THING TO THE RIGHT " << old_forest[rig_index] << std::endl;
-                }
                 if (i > 0 && old_forest[abv_index] == 1) // Above
                 {
                     new_forest[abv_index] = 2;
@@ -195,145 +340,44 @@ bool update_forest_MPI(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
                 {
                     new_forest[lef_index] = 2;
                     burning = true;
+                    if (j == j0 && nproc > 1)
+                    {
+                        comm_cols = true;
+                    }
                 }
-                if (j + 1 < Nj && old_forest[rig_index] == 1) // Right
+                if (j < Nj && old_forest[rig_index] == 1) // Right
                 {
-                    std::cout << "I SHOULD GO RIGHT MABE EHEHEHEHE" << std::endl;
                     new_forest[rig_index] = 2;
                     burning = true;
-                }
-                new_forest[index] = 3;
-            }
-        }
-    }
-
-    // Update old forest after new trees meet their doom...
-
-    double start_communication = MPI_Wtime();
-
-    if (nproc > 1)
-    {
-        for (int oe = 0; oe <= 1; oe++)
-        {
-
-            // send
-            if (iproc > 0 && iproc % 2 == oe)
-            {
-                // find the index of the first pixel on row i and column j0
-                for (int i = 0; i < Ni; i++)
-                {
-                    int ind = get_1D_index(i, j0, Nj);
-                    // std::cout << "Sending1 row " << i << " col " << j0 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc - 1 << std::endl;
-                    // send the data, using i as a tag
-                    MPI_Send(&new_forest[ind], 1, MPI_INT, iproc - 1, i, MPI_COMM_WORLD);
-                }
-            }
-            // receive
-            if (iproc < nproc - 1 && iproc % 2 == (oe + 1) % 2)
-            {
-                // find the index of the first pixel on row i and column j1
-                for (int i = 0; i < Ni; i++)
-                {
-                    int ind = get_1D_index(i, j1, Nj);
-                    // receive the data, where each row has Nj * 3 elements, using i1 as the tag
-                    // std::cout << "Receiving1 row " << i << " col " << j1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc + 1 << std::endl;
-                    MPI_Recv(&old_forest[ind], 1, MPI_INT, iproc + 1, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                }
-            }
-            MPI_Barrier(MPI_COMM_WORLD);
-        }
-
-        // now send in the other direction, again using our even/odd split
-        for (int oe = 0; oe <= 1; oe++)
-        {
-
-            // send
-            if (iproc < nproc - 1 && iproc % 2 == oe)
-            {
-                // find the index of the first pixel on row i and column j1-1
-                for (int i = 0; i < Ni; i++)
-                {
-                    int ind = get_1D_index(i, j1 - 1, Nj);
-                    // send the data, using i as a tag
-                     std::cout << "sending val " << new_forest[ind] <<" Sending2 row " << i << " col " << j1 - 1 << " (ind=" << ind << ") from task " << iproc << " to task " << iproc + 1 << std::endl;
-                     //std::cout << "it's send: " << new_forest[ind] << std::endl;
-                    MPI_Send(&new_forest[ind], 1, MPI_INT, iproc + 1, i, MPI_COMM_WORLD);
-                }
-            }
-            // receive
-            if (iproc > 0 && iproc % 2 == (oe + 1) % 2)
-            {
-                // find the index of the first pixel on row i and column j0-1
-                for (int i = 0; i < Ni; i++)
-                {
-                    int ind = get_1D_index(i, j0 - 1, Nj);
-                     //std::cout << "it's before: " << new_forest[ind] << std::endl;
-                    MPI_Recv(&old_forest[ind], 1, MPI_INT, iproc - 1, i, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                     //std::cout << "it's: Now " << old_forest[ind] << std::endl;
-                     std::cout << "recieing val " << old_forest[ind] << " Receiving2 row " << i << " col " << j0 - 1 << " (ind=" << ind << ") on task " << iproc << " from task " << iproc - 1 << std::endl;
-                }
-            }
-        } // Maybe try updating the grid again after the send recieves...
-        MPI_Barrier(MPI_COMM_WORLD);
-
-        for (int i = 0; i < Ni; i++)
-        {
-            if (iproc > 0) // Update left boundary
-            {
-                int ind = get_1D_index(i, j0 - 1, Nj);
-                if (old_forest[ind] == 2)
-                {
-                    int ind_local = get_1D_index(i, j0, Nj);
-                    if (new_forest[ind_local] == 1)
+                    if (j + 1 == j1 && nproc > 1)
                     {
-                        new_forest[ind_local] = 2;
-                        burning = true;
+                        comm_cols = true;
                     }
                 }
-            }
-
-            if (iproc < nproc - 1) // Update right boundary
-            {
-                int ind = get_1D_index(i, j1, Nj);
-                if (old_forest[ind] == 2) // If the received cell is burning
-                {
-                    int ind_local = get_1D_index(i, j1 - 1, Nj);
-                    if (new_forest[ind_local] == 1)
-                    {
-                        new_forest[ind_local] = 2;
-                        burning = true;
-                    }
-                }
+                new_forest[index] = 3; // tree has deceased :')
             }
         }
-
-        // copy the items belonging to a task from new forest to old forest
-        for (int i = 0; i < Ni; i++)
-        {
-            for (int j = j0; j < j1; j++)
-            {
-                int ind = get_1D_index(i, j, Nj);
-                old_forest[ind] = new_forest[ind];
-            }
-        }
-        MPI_Barrier(MPI_COMM_WORLD);
-        bool local_burning = burning; // Store local value
-        // int local_size = Ni * (j1 - j0);
-        MPI_Allreduce(&local_burning, &burning, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
-        // MPI_Allgatherv(new_forest.data(), local_size, MPI_INT, old_forest.data(), recvcounts.data(), displs.data(), MPI_INT, MPI_COMM_WORLD);
     }
     if (nproc == 1)
     {
         // No MPI communication needed for a single process
         old_forest = new_forest;
+        state = {burning, comm_cols};
+    }
+    else
+    {
+        bool global_burning = burning;
+        bool global_comm_cols = comm_cols;
+        MPI_Allreduce(&burning, &global_burning, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
+        MPI_Allreduce(&comm_cols, &global_comm_cols, 1, MPI_C_BOOL, MPI_LOR, MPI_COMM_WORLD);
+        state = {global_burning, global_comm_cols};
     }
 
-    double end_communication = MPI_Wtime();
+    double end_calculation = MPI_Wtime();
 
-    calculation_time += start_communication - start_calculation;
-    communication_time += end_communication - start_communication;
+    calculation_time += end_calculation - start_calculation;
 
-    return burning;
+    return state;
 }
 
 int main(int argc, char **argv)
@@ -416,18 +460,6 @@ int main(int argc, char **argv)
     int j0, j1;
     distribute_grid(Nj, iproc, nproc, j0, j1);
 
-    // Initialise values needed for MPI_Allgatherv
-    std::vector<int> recvcounts(nproc); // Amount of elements each process contributes
-    std::vector<int> displs(nproc);     // Position of where data starts in recive buffer
-    for (p = 0; p < nproc; p++)
-    {
-        int temp_j0, temp_j1;
-        distribute_grid(Nj, p, nproc, temp_j0, temp_j1);
-        recvcounts[p] = Ni * (temp_j1 - temp_j0);
-        displs[p] = temp_j0;
-    }
-    // std::cout << iproc << " " << j0 << " " << j1 << std::endl;
-    //  std::cout << iproc << " " << j0 << " " << j1 << std::endl;
     //   Handling file writing (if needed)
 
     std::ofstream grid_file; // Initialise fstream object
@@ -438,41 +470,48 @@ int main(int argc, char **argv)
         if (iproc == 0)
         {
             grid_file.open("burning_forest.dat", std::ios::trunc);
-            write_grid(grid_file, Ni, Nj, grid);
         }
     }
 
-    // Initialise burning state and step count
-    bool burning = true;
+    // Initialise burning state, col communication state and step count
+    ForestState state(true, false);
     int nsteps = 0;
 
     // Synchronise processes before the fun (forest simulation) begins
     MPI_Barrier(MPI_COMM_WORLD);
+    if (write)
+    {
+        write_grid(grid_file, Ni, Nj, j0, j1, grid, iproc, nproc);
+    }
 
     double start_burn = MPI_Wtime(); // Start burn time measurement
     double calculation_time = 0.0;   // Initialise calculation time measurement
     double communication_time = 0.0; // Initialise proc communication time measurement
 
     // Update forest while it is burning (burning = true)
-    while (burning)
+    while (state.burning == true)
     {
-        // std::cout << nsteps << std::endl;
-        if (iproc == 0)
+        state = update_forest_state(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, calculation_time);
+
+        nsteps += 1; // Increment step count by 1
+        if (state.comm_cols && nproc > 1)
         {
-            std::cout << "-------------------- " << nsteps << " ---------------------" << std::endl;
+            communicate_cols(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, communication_time);
+            update_col_boundaries(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, calculation_time);
+            reset_old_forest(Ni, Nj, j0, j1, grid, new_grid);
         }
-        MPI_Barrier(MPI_COMM_WORLD);
-        // display_grid(Ni, Nj, grid);
-        burning = update_forest_MPI(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, calculation_time, communication_time, recvcounts, displs);
-        // Carry out if write = true
+        else if (state.comm_cols == false && nproc > 1)
+        {
+            reset_old_forest(Ni, Nj, j0, j1, grid, new_grid);
+        }
+        else if (nproc == 1)
+        {
+            grid = new_grid;
+        }
         if (write)
         {
-            if (iproc == 0)
-            {
-                write_grid(grid_file, Ni, Nj, grid);
-            }
+            write_grid(grid_file, Ni, Nj, j0, j1, grid, iproc, nproc);
         }
-        nsteps += 1; // Increment step count by 1
     }
     double end_burn = MPI_Wtime();
 
@@ -493,5 +532,5 @@ int main(int argc, char **argv)
     // Finalise MPI (but in american spelling)
     MPI_Finalize();
 
-    return EXIT_SUCCESS; // eqv. MPI_Gain(sanity back) but thats not what 99.95% of the world has
+    return EXIT_SUCCESS; // eqv. MPI_Gain(sanity back) but thats not what has happened
 }
