@@ -355,13 +355,12 @@ void reset_old_forest(int Ni, int Nj, int j0, int j1,
 ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
                                 std::vector<int> &old_forest,
                                 std::vector<int> &new_forest,
-                                double &calculation_time)
+                                bool &reach_bot)
 {
     bool burning = false;
     bool comm_cols = false;
     int left_bound, right_bound;
     ForestState state(burning, comm_cols);
-    double start_calculation = MPI_Wtime();
     for (int i = 0; i < Ni; i++)
     {
         for (int j = j0; j < j1; j++)
@@ -382,6 +381,10 @@ ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int n
                 {
                     new_forest[bel_index] = 2;
                     burning = true;
+                    if (i + 1 == Ni - 1)
+                    {
+                        reach_bot = true;
+                    }
                 }
                 if (j > 0 && old_forest[lef_index] == 1) // Left
                 {
@@ -422,7 +425,6 @@ ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int n
 
     double end_calculation = MPI_Wtime();
 
-    calculation_time += end_calculation - start_calculation;
 
     return state;
 }
@@ -536,6 +538,8 @@ int main(int argc, char **argv)
     // Initialise burning state, col communication state and step count
     ForestState state(true, false);
     int nsteps = 0;
+    int nsteps_bot = -1;
+    bool take_nsteps_bot = false;
 
     // Synchronise processes before the fun (forest simulation) begins
     MPI_Barrier(MPI_COMM_WORLD);
@@ -551,9 +555,14 @@ int main(int argc, char **argv)
     // Update forest while it is burning (burning = true)
     while (state.burning == true)
     {
-        state = update_forest_state(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, calculation_time);
-
+        take_nsteps_bot = false;
+        double start_calculation = MPI_Wtime();
+        state = update_forest_state(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, take_nsteps_bot);
         nsteps += 1; // Increment step count by 1
+        if (take_nsteps_bot && nsteps_bot < nsteps)
+        {
+            nsteps_bot = nsteps;
+        }
         if (state.comm_cols && nproc > 1)
         {
             communicate_cols(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, communication_time);
@@ -568,6 +577,8 @@ int main(int argc, char **argv)
         {
             grid = new_grid;
         }
+        double end_calculation = MPI_Wtime();
+        calculation_time += end_calculation - start_calculation;
         if (write)
         {
             write_grid(grid_file, Ni, Nj, j0, j1, grid, iproc, nproc);
@@ -584,7 +595,7 @@ int main(int argc, char **argv)
     double total_MPI_time = end_burn - start_broadcast;
 
     // Output
-    std::cout << config_id << "\t" << iproc << "\t" << nproc << "\t" << Ni << "\t" << Nj << "\t" << p << "\t" << total_MPI_time << "\t" << broadcast_time << "\t" << calculation_time << "\t" << communication_time << "\t" << burning_time << "\t" << nsteps << std::endl;
+    std::cout << config_id << "\t" << iproc << "\t" << nproc << "\t" << Ni << "\t" << Nj << "\t" << p << "\t" << total_MPI_time << "\t" << broadcast_time << "\t" << calculation_time << "\t" << communication_time << "\t" << burning_time << "\t" << nsteps << "\t" << nsteps_bot << std::endl;
 
     // Finalise MPI (but in american spelling)
     MPI_Finalize();
