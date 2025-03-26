@@ -355,14 +355,12 @@ void reset_old_forest(int Ni, int Nj, int j0, int j1,
 ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int nproc,
                                 std::vector<int> &old_forest,
                                 std::vector<int> &new_forest,
-                                double &calculation_time,
                                 bool &reach_bot)
 {
     bool burning = false;
     bool comm_cols = false;
     int left_bound, right_bound;
     ForestState state(burning, comm_cols);
-    double start_calculation = MPI_Wtime();
     for (int i = 0; i < Ni; i++)
     {
         for (int j = j0; j < j1; j++)
@@ -427,7 +425,6 @@ ForestState update_forest_state(int Ni, int Nj, int j0, int j1, int iproc, int n
 
     double end_calculation = MPI_Wtime();
 
-    calculation_time += end_calculation - start_calculation;
 
     return state;
 }
@@ -559,7 +556,8 @@ int main(int argc, char **argv)
     while (state.burning == true)
     {
         take_nsteps_bot = false;
-        state = update_forest_state(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, calculation_time, take_nsteps_bot);
+        double start_calculation = MPI_Wtime();
+        state = update_forest_state(Ni, Nj, j0, j1, iproc, nproc, grid, new_grid, take_nsteps_bot);
         nsteps += 1; // Increment step count by 1
         if (take_nsteps_bot && nsteps_bot < nsteps)
         {
@@ -579,6 +577,8 @@ int main(int argc, char **argv)
         {
             grid = new_grid;
         }
+        double end_calculation = MPI_Wtime();
+        calculation_time += end_calculation - start_calculation;
         if (write)
         {
             write_grid(grid_file, Ni, Nj, j0, j1, grid, iproc, nproc);
